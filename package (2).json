@@ -1,0 +1,10 @@
+{
+  "name": "chem-lab-reports",
+  "version": "2.0.0",
+  "description": "Chemistry lab report platform with student portal, admin panel, M-Pesa subscriptions and passkey security",
+  "main": "server.js",
+  "scripts": { "start": "node server.js", "test": "node test/smoke.js" },
+  "engines": { "node": ">=18" },
+  "optionalDependencies": { "nodemailer": "^6.9.14" },
+  "license": "MIT"
+}

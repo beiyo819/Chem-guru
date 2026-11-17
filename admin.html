@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin – Chem Lab Reports</title><link rel="stylesheet" href="/style.css">
+</head><body>
+<div id="login" class="wrap hide" style="max-width:420px">
+  <h1 style="margin:24px 0 12px">🔧 Admin login</h1>
+  <div class="card"><label>Username</label><input id="au"><label>Password</label><input id="ap" type="password">
+  <p><button class="p" id="ag" style="width:100%">Log in</button></p></div>
+</div>
+<div id="app" class="hide">
+  <div class="top"><h1>🔧 Admin panel</h1><span class="sp"></span><a href="/" class="btn" style="text-decoration:none">Student site</a><button id="out">Log out</button></div>
+  <div class="wrap"><div class="tabs" id="tabs"></div><div id="view"></div></div>
+</div>
+<script src="/common.js"></script>
+<script>
+const TABS = [['over', '🏠 Overview'], ['live', '🟢 Live activities'], ['stu', '👥 Students'], ['subj', '📚 Subjects & instructions'], ['pay', '💰 Payments']];
+let TAB = 'over', liveT = null, OV = null;
+$('#ag').onclick = wrap(async () => { await api('/admin/login', 'POST', { username: $('#au').value, password: $('#ap').value }); boot(); });
+$('#out').onclick = async () => { await api('/logout', 'POST'); location.reload(); };
+async function boot() {
+  try { OV = await api('/admin/overview'); } catch (e) { $('#login').classList.remove('hide'); $('#app').classList.add('hide'); return; }
+  $('#login').classList.add('hide'); $('#app').classList.remove('hide'); nav(TAB);
+}
+function nav(t) {
+  TAB = t; clearInterval(liveT);
+  $('#tabs').innerHTML = TABS.map(([k, l]) => `<button class="${k === t ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('');
+  $('#tabs').querySelectorAll('button').forEach(b => b.onclick = () => nav(b.dataset.tab));
+  wrap(({ over, live, stu, subj, pay }[t]))();
+}
+
+async function over() {
+  OV = await api('/admin/overview'); const m = OV.mpesa, on = OV.settings.paymentsEnabled;
+  $('#view').innerHTML = `
+  ${OV.defaultAdmin ? '<div class="tip">⚠️ You are using the default admin password. Set ADMIN_PASS in your .env file.</div>' : ''}
+  <div class="stats"><div class="stat"><b>${OV.students}</b>Students</div><div class="stat"><b>${OV.online}</b>Online now</div><div class="stat"><b>${OV.activeSubs}</b>Active subscriptions</div><div class="stat"><b>KES ${OV.revenue}</b>Revenue</div><div class="stat"><b>${OV.reports}</b>Reports stored</div></div>
+  <div class="card"><h2>Student payments</h2>
+   <label class="sw" style="color:var(--ink);font-size:1rem"><input type="checkbox" id="pt" style="width:auto" ${on ? 'checked' : ''}> Payments are <b id="pl">${on ? 'ON' : 'OFF – students use everything for FREE'}</b></label>
+   <p class="mute" style="font-size:.88rem">Turn payments off to give every student free access to all subjects. Turn on to require a subscription.</p>
+   <p>M-Pesa: ${m.simulate ? '<span class="pill on">SIMULATION mode</span>' : m.configured ? `<span class="pill on">configured (${esc(m.env)})</span>` : '<span class="pill off">not configured – see README</span>'}</p>
+   <p>Report writer: ${OV.ai.includes('ON') ? '<span class="pill on">' + esc(OV.ai) + '</span>' : '<span class="pill off">' + esc(OV.ai) + '</span>'}</p>
+   <p class="mute" style="font-size:.85rem;word-break:break-all">Callback URL: ${esc(m.callbackUrl)}</p></div>
+  <div class="card"><h2>📧 Email all students</h2><p class="mute" style="font-size:.85rem">${esc(OV.mail)}</p>
+   <label>Subject</label><input id="es"><label>Message</label><textarea id="em"></textarea><p><button class="p" id="eb">Send to all registered emails</button> <span id="er" class="mute"></span></p></div>
+  <div class="card"><h2>Reset activities</h2><p class="mute">Clears the whole activity log (student and admin history). Reports and subscriptions are not touched.</p><button class="d" id="rb">Reset all activities</button></div>`;
+  $('#pt').onchange = wrap(async e => { await api('/admin/settings', 'POST', { paymentsEnabled: e.target.checked }); toast(e.target.checked ? 'Payments ON' : 'Payments OFF – free access'); over(); });
+  $('#eb').onclick = wrap(async () => { if (!confirm('Email ALL registered students now?')) return; $('#er').textContent = 'Sending…'; const r = await api('/admin/email-all', 'POST', { subject: $('#es').value, message: $('#em').value }); $('#er').textContent = `Sent ${r.sent} · saved to outbox ${r.logged} · failed ${r.failed}`; });
+  $('#rb').onclick = wrap(async () => { if (confirm('Reset ALL activities? This cannot be undone.')) { await api('/admin/reset-activities', 'POST', {}); toast('Activities reset'); } });
+}
+
+async function live() {
+  const draw = async () => {
+    const d = await api('/admin/live'); if (TAB !== 'live') return;
+    $('#view').innerHTML = `<div class="card"><h2>🟢 Students online now (${d.online.length})</h2>${d.online.length ? `<div class="scroll"><table><tr><th>Student</th><th>Reg No</th><th>Currently</th><th>Last seen</th></tr>${d.online.map(o => `<tr><td>${esc(o.name)}</td><td>${esc(o.regNo)}</td><td>${esc(o.doing)}</td><td>${new Date(o.last).toLocaleTimeString()}</td></tr>`).join('')}</table></div>` : '<p class="mute">Nobody online.</p>'}</div>
+    <div class="card"><h2>All ongoing activities <span class="mute" style="font-weight:400">(${d.total} logged · refreshes every 5s)</span></h2><div class="scroll"><table><tr><th>When</th><th>Who</th><th>Type</th><th>Detail</th></tr>${d.recent.map(a => `<tr><td>${when(a.t)}</td><td>${esc(a.name)}</td><td>${esc(a.type)}</td><td>${esc(a.detail)}</td></tr>`).join('')}</table></div></div>`;
+  };
+  await draw(); liveT = setInterval(wrap(draw), 5000);
+}
+
+async function stu() {
+  const s = await api('/admin/students');
+  $('#view').innerHTML = `<div class="card"><h2>All registered students (${s.length})</h2><div class="scroll"><table>
+  <tr><th>Photo</th><th>Name</th><th>Reg No</th><th>Phone</th><th>Email</th><th>Password</th><th>Subscriptions</th><th>Reports</th><th>Joined</th><th></th></tr>
+  ${s.map(u => `<tr><td>${u.photo ? `<img class="avatar" src="${esc(u.photo)}">` : '—'}</td><td>${esc(u.name)}</td><td>${esc(u.regNo)}</td><td>${esc(u.phone)}</td><td>${esc(u.email)}</td>
+   <td>🔒 encrypted<br><button class="sm" data-rp="${u.id}">Reset</button></td>
+   <td>${u.subs.map(x => `${esc(x.subjectName)}: ${x.active ? '<span class="ok" data-end="' + x.endsAt + '"></span>' : '<span class="exp">expired</span>'}`).join('<br>') || '—'}</td><td>${u.reports}</td><td>${when(u.created)}</td>
+   <td><button class="sm d" data-rm="${u.id}">Remove</button></td></tr>`).join('')}</table></div>
+  <p class="mute" style="font-size:.85rem">Passwords are stored encrypted (hashed) and cannot be read by anyone – including you. If a student forgets theirs, press Reset to create a temporary password (shown once and emailed to them).</p></div>`;
+  document.querySelectorAll('[data-rp]').forEach(b => b.onclick = wrap(async () => { if (!confirm('Create a temporary password for this student?')) return; const r = await api('/admin/students/' + b.dataset.rp + '/reset-password', 'POST', {}); prompt('Temporary password (shown once). Email: ' + r.mail, r.temp); }));
+  document.querySelectorAll('[data-rm]').forEach(b => b.onclick = wrap(async () => { if (confirm('Remove this student and all their work?')) { await api('/admin/students/' + b.dataset.rm, 'DELETE'); stu(); } }));
+}
+
+async function subj() {
+  const list = await api('/admin/subjects');
+  $('#view').innerHTML = `<div class="row"><button class="p" id="ns">＋ New subject</button></div>` + list.map(s => card(s)).join('');
+  $('#ns').onclick = wrap(async () => { await api('/admin/subjects', 'POST', { name: 'New subject', price: 100, days: 30, instructions: [] }); subj(); });
+  document.querySelectorAll('.sc').forEach(c => {
+    const id = c.dataset.id, ul = c.querySelector('.ins');
+    c.querySelector('.addi').onclick = () => { ul.insertAdjacentHTML('beforeend', irow('')); ul.lastElementChild.querySelector('input').focus(); };
+    c.onclick = e => { if (e.target.classList.contains('xi')) e.target.parentElement.remove(); };
+    c.querySelector('.sv').onclick = wrap(async () => { await api('/admin/subjects', 'POST', { id, name: c.querySelector('.nm').value, price: c.querySelector('.pr').value, days: c.querySelector('.dy').value, instructions: [...ul.querySelectorAll('input')].map(i => i.value) }); toast('Saved ✓'); subj(); });
+    c.querySelector('.rm').onclick = wrap(async () => { if (confirm('Delete this subject?')) { await api('/admin/subjects/' + id, 'DELETE'); subj(); } });
+  });
+}
+const irow = v => `<div class="row"><input value="${esc(v)}" placeholder="Instruction students must follow"><button class="sm xi">✕</button></div>`;
+const card = s => `<div class="card sc" data-id="${s.id}"><div class="grid"><div><label>Subject name</label><input class="nm" value="${esc(s.name)}"></div>
+ <div class="row" style="align-items:flex-end"><div style="flex:1"><label>Price (KES)</label><input class="pr" type="number" min="1" value="${s.price}"></div><div style="flex:1"><label>Access days</label><input class="dy" type="number" min="1" value="${s.days}"></div></div></div>
+ <h3>Instructions shown to students on this subject</h3><div class="ins">${s.instructions.map(irow).join('')}</div>
+ <div class="row"><button class="sm addi">＋ Add instruction</button><span class="sp" style="flex:1"></span><button class="p sv">Save</button><button class="d rm">Delete subject</button></div></div>`;
+
+async function pay() {
+  const p = await api('/admin/payments');
+  $('#view').innerHTML = `<div class="card"><h2>Payments</h2><div class="scroll"><table><tr><th>When</th><th>Student</th><th>Phone</th><th>Subject</th><th>KES</th><th>Status</th><th>Receipt</th></tr>
+  ${p.map(x => `<tr><td>${when(x.created)}</td><td>${esc(x.name)}</td><td>${esc(x.phone)}</td><td>${esc(x.subjectName)}</td><td>${x.amount}</td><td class="${x.status === 'success' ? 'ok' : x.status === 'failed' ? 'bad' : ''}">${esc(x.status)}${x.reason ? ' – ' + esc(x.reason) : ''}</td><td>${esc(x.receipt || '')}</td></tr>`).join('') || '<tr><td colspan="7" class="mute">No payments yet</td></tr>'}</table></div></div>`;
+}
+boot();
+</script></body></html>

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chem Lab Reports – Student Portal</title><link rel="stylesheet" href="/style.css">
+</head><body>
+
+<div id="auth" class="wrap hide" style="max-width:460px">
+  <h1 style="margin:24px 0 4px">⚗️ Chem Lab Reports</h1>
+  <p class="mute">Write, save and print your lab reports.</p>
+  <div class="tabs"><button id="tL" class="on">Log in</button><button id="tR">Create account</button></div>
+  <div class="card" id="fL">
+    <label>Phone number (M-Pesa)</label><input id="lp" inputmode="tel" placeholder="0712345678">
+    <label>Password</label><input id="lw" type="password">
+    <p><button class="p" id="goL" style="width:100%">Log in</button></p>
+    <p class="mute" style="font-size:.85rem">Forgot your password? Ask the administrator for a temporary one.</p>
+  </div>
+  <div class="card hide" id="fR">
+    <label>Full name</label><input id="rn"><label>Registration number</label><input id="rr">
+    <label>Phone number (M-Pesa)</label><input id="rp" inputmode="tel" placeholder="0712345678">
+    <label>Email</label><input id="re" type="email"><label>Password (min 6)</label><input id="rw" type="password">
+    <p><button class="p" id="goR" style="width:100%">Create account</button></p>
+  </div>
+</div>
+
+<div id="app" class="hide">
+  <div class="top"><span id="av"></span><div><b id="un"></b><div class="mute" style="font-size:.8rem" id="us"></div></div><span class="sp"></span><button id="out">Log out</button></div>
+  <div class="wrap">
+    <div class="tabs" id="tabs"></div>
+    <div id="view"></div>
+  </div>
+</div>
+<div id="printArea"></div>
+
+<script src="/common.js"></script>
+<script>
+const FIELDS = [["institution","Institution"],["name","Name"],["regno","Reg. No."],["topic","Topic"],["title","Title"],["task","Task"],["expname","Name of experiment"],["lecturer","Name of lecturer"],["expdate","Date of experiment","date"],["subdate","Date of submission","date"]];
+const DSHEET = [["dname","Name"],["dreg","Reg. No."],["ddate","Date","date"],["dtopic","Topic"],["dtitle","Title"]];
+const today = () => new Date().toISOString().slice(0, 10);
+const blank = () => ({ name: ME ? ME.name : '', regno: ME ? ME.regNo : '', dname: ME ? ME.name : '', dreg: ME ? ME.regNo : '', expdate: today(), subdate: today(), ddate: today(),
+  objectives: [], reagents: [""], apparatus: [""], procRaw: "", steps: [], gen: false, table: { h: ["Trial","Reading 1","Reading 2"], r: [["1","",""],["2","",""]] } });
+let ME, SUBS = [], PAY = true, ACCESS = true, TAB = 'subs', ED = null, pollT = null, saveT = null;
+
+// ---------- auth ----------
+const show = a => { $('#auth').classList.toggle('hide', !a); $('#app').classList.toggle('hide', a); };
+$('#tL').onclick = () => { $('#fL').classList.remove('hide'); $('#fR').classList.add('hide'); $('#tL').classList.add('on'); $('#tR').classList.remove('on'); };
+$('#tR').onclick = () => { $('#fR').classList.remove('hide'); $('#fL').classList.add('hide'); $('#tR').classList.add('on'); $('#tL').classList.remove('on'); };
+$('#goL').onclick = wrap(async () => { await api('/login', 'POST', { phone: $('#lp').value, password: $('#lw').value }); await boot(); });
+$('#goR').onclick = wrap(async () => { await api('/register', 'POST', { name: $('#rn').value, regNo: $('#rr').value, phone: $('#rp').value, email: $('#re').value, password: $('#rw').value }); await boot(); });
+$('#out').onclick = async () => { await api('/logout', 'POST'); location.reload(); };
+
+async function boot() {
+  try {
+    const m = await api('/me'); ME = m.user; SUBS = m.subs; PAY = m.paymentsEnabled; ACCESS = m.hasAccess;
+  } catch (e) { show(true); return; }
+  show(false); head();
+  if (!ACCESS) TAB = 'subs';
+  nav(TAB);
+}
+function head() {
+  $('#av').innerHTML = ME.photo ? `<img class="avatar" src="${esc(ME.photo)}" alt="">` : `<span class="avatar">${esc(ME.name.slice(0, 1).toUpperCase())}</span>`;
+  $('#un').textContent = ME.name; $('#us').textContent = ME.regNo + ' · ' + ME.phone;
+}
+const TABS = [['subs', '💳 Subscriptions'], ['reports', '📁 My Reports'], ['acts', '🕑 Activity'], ['profile', '👤 Profile']];
+function nav(t) {
+  if (ED && (t !== 'reports' || TAB === 'reports')) { saveNow(true); ED = null; }
+  if (!ACCESS && t !== 'subs' && t !== 'profile') { toast('Subscribe first to use the report writer', true); t = 'subs'; }
+  TAB = t; DOING = TABS.find(x => x[0] === t)[1].replace(/^\S+\s/, 'Viewing ');
+  $('#tabs').innerHTML = TABS.map(([k, l]) => `<button class="${k === t ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('');
+  $('#tabs').querySelectorAll('button').forEach(b => b.onclick = () => nav(b.dataset.tab));
+  ({ subs: vSubs, reports: vReports, acts: vActs, profile: vProfile })[t]();
+}
+
+// ---------- subscriptions ----------
+async function vSubs() {
+  clearInterval(pollT);
+  const subjects = await api('/subjects'); SUBS = (await api('/me')).subs;
+  const mine = SUBS.filter(s => s.active);
+  $('#view').innerHTML = `
+  ${PAY ? '' : '<div class="tip">🎉 Free access is currently ON – no payment is needed. Enjoy!</div>'}
+  ${PAY && !ACCESS ? '<div class="tip">You have no active subscription. Subscribe to a subject below to continue.</div>' : ''}
+  <div class="card"><h2>Your subscriptions</h2>${mine.length ? mine.map(s => `<div class="row"><b>${esc(s.subjectName)}</b><span class="count" data-end="${s.endsAt}"></span><span class="mute">ends ${when(s.endsAt)}</span></div>`).join('') : '<p class="mute">No active subscriptions.</p>'}
+  ${SUBS.filter(s => !s.active).map(s => `<div class="row mute">${esc(s.subjectName)} – <span class="exp">expired ${when(s.endsAt)}</span></div>`).join('')}</div>
+  <h2>Subjects</h2>
+  ${subjects.map(s => `<div class="card"><div class="row"><b style="font-size:1.1rem">${esc(s.name)}</b><span class="pill ${s.active ? 'on' : 'off'}">${s.active ? 'Subscribed' : 'Not subscribed'}</span><span class="mute">KES ${s.price} · ${s.days} days</span></div>
+   <h3>Instructions</h3><ol class="list">${s.instructions.map(i => `<li>${esc(i)}</li>`).join('') || '<li class="mute">None yet</li>'}</ol>
+   ${PAY ? `<div class="row"><input id="ph-${s.id}" value="${esc(ME.phone)}" inputmode="tel" style="max-width:200px"><button class="p" data-pay="${s.id}">${s.active ? 'Extend' : 'Subscribe'} – KES ${s.price}</button></div><div id="ps-${s.id}" class="mute"></div>` : ''}</div>`).join('')}`;
+  document.querySelectorAll('[data-pay]').forEach(b => b.onclick = wrap(() => pay(b.dataset.pay, b)));
+}
+async function pay(id, btn) {
+  btn.disabled = true; const st = $('#ps-' + id);
+  try {
+    const r = await api('/subscribe', 'POST', { subjectId: id, phone: $('#ph-' + id).value });
+    st.textContent = '📱 Check your phone and enter your M-Pesa PIN…';
+    pollT = setInterval(async () => {
+      try {
+        const p = await api('/payment/' + r.paymentId);
+        if (p.status === 'success') { clearInterval(pollT); toast('Payment received ✓ ' + p.receipt); ACCESS = true; vSubs(); }
+        else if (p.status === 'failed') { clearInterval(pollT); st.innerHTML = `<span class="bad">Payment failed: ${esc(p.reason || 'cancelled')}</span>`; btn.disabled = false; }
+      } catch (e) {}
+    }, 3000);
+  } catch (e) { btn.disabled = false; st.innerHTML = `<span class="bad">${esc(e.message)}</span>`; }
+}
+
+// ---------- reports ----------
+async function vReports() {
+  if (ED) return vEditor();
+  const list = await api('/reports'), subjects = (await api('/subjects')).filter(s => s.canUse);
+  $('#view').innerHTML = `<div class="card"><h2>New report</h2><div class="row"><select id="ns" style="max-width:260px">${subjects.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select><button class="p" id="nb" ${subjects.length ? '' : 'disabled'}>＋ Start report</button></div></div>
+  <div class="card"><h2>Storage – all your saved work</h2>${list.length ? `<div class="scroll"><table><tr><th>Title</th><th>Subject</th><th>Last saved</th><th></th></tr>${list.map(r => `<tr><td>${esc(r.title)}</td><td>${esc(r.subjectName)}</td><td>${when(r.updated)}</td><td><button class="sm" data-o="${r.id}">Open</button> <button class="sm d" data-x="${r.id}">Delete</button></td></tr>`).join('')}</table></div>` : '<p class="mute">Nothing saved yet.</p>'}</div>`;
+  $('#nb').onclick = () => { const s = subjects.find(x => x.id === $('#ns').value); ED = { id: null, subjectId: s.id, instructions: s.instructions, subjectName: s.name, title: '', data: blank(), view: 'input' }; vEditor(); };
+  document.querySelectorAll('[data-o]').forEach(b => b.onclick = wrap(async () => {
+    const r = await api('/reports/' + b.dataset.o), s = (await api('/subjects')).find(x => x.id === r.subjectId) || { name: '', instructions: [] }, d = Object.assign(blank(), r.data);
+    if (d.procedure && !d.procRaw) d.procRaw = d.procedure;
+    ED = { id: r.id, subjectId: r.subjectId, instructions: s.instructions, subjectName: s.name, title: r.title, data: d, view: d.gen ? 'result' : 'input' }; vEditor();
+  }));
+  document.querySelectorAll('[data-x]').forEach(b => b.onclick = wrap(async () => { if (confirm('Delete this report permanently?')) { await api('/reports/' + b.dataset.x, 'DELETE'); vReports(); } }));
+}
+const val = k => esc(ED.data[k] || '');
+const vEditor = () => ED.view === 'result' ? vResult() : vInput();
+
+// ----- step 1: the student's inputs -----
+function vInput() {
+  const D = ED.data, t = D.table; DOING = 'Filling in ' + ED.subjectName + ' report details';
+  const fld = (k, l, ty) => `<div><label>${l}</label><input type="${ty || 'text'}" data-k="${k}" value="${val(k)}"></div>`;
+  const rows = key => D[key].map((v, i) => `<div class="row"><b>${i + 1}.</b><input data-l="${key}" data-i="${i}" value="${esc(v)}"><button class="sm" data-del="${key}-${i}">✕</button></div>`).join('');
+  $('#view').innerHTML = `
+  <div class="row"><button id="back">← My reports</button><input id="rt" placeholder="Report name (for your storage)" value="${esc(ED.title)}" style="flex:2"><button id="sv">💾 Save</button>${D.gen ? '<button id="vr">View report →</button>' : ''}</div>
+  <div id="sst" class="mute" style="font-size:.85rem;margin-bottom:8px">Not saved yet</div>
+  ${ED.instructions.length ? `<div class="card"><h2>📌 ${esc(ED.subjectName)} instructions from your instructor</h2><ol class="list">${ED.instructions.map(i => `<li>${esc(i)}</li>`).join('')}</ol></div>` : ''}
+  <div class="tip">Fill in the sections below. When you press <b>Generate</b>, the website writes the objectives, introduction, discussion, conclusions, calculations and references for you.</div>
+  <div class="card"><h2>1. Experiment details (cover page)</h2><div class="grid">${FIELDS.map(f => fld(...f)).join('')}</div></div>
+  <div class="card"><h2>2. Reagents and apparatus</h2><div class="grid"><div><label>Reagents</label>${rows('reagents')}<button class="sm" data-add="reagents">+ Add</button></div><div><label>Apparatus</label>${rows('apparatus')}<button class="sm" data-add="apparatus">+ Add</button></div></div></div>
+  <div class="card"><h2>3. Procedure</h2><div class="tip">Paste or upload your procedure as you wrote it. It will be rewritten as numbered points, in the past tense, with no personal pronouns.</div>
+   <textarea data-k="procRaw" style="min-height:160px" placeholder="e.g. Measure 25 mL of NaOH with a pipette and pour it into a flask. Add 3 drops of indicator…">${val('procRaw')}</textarea>
+   <div class="row" style="margin-top:6px"><label style="margin:0">Or upload a text file (.txt):</label><input type="file" id="pup" accept=".txt,.md,text/plain" style="max-width:260px"></div></div>
+  <div class="card"><h2>4. Data sheet</h2><div class="grid">${DSHEET.map(f => fld(...f)).join('')}</div><label>Recorded values (table)</label>
+   <div class="scroll"><table class="dt"><tr>${t.h.map((h, j) => `<th><input data-th="${j}" value="${esc(h)}"></th>`).join('')}</tr>${t.r.map((r, i) => `<tr>${r.map((c, j) => `<td><input data-td="${i}-${j}" value="${esc(c)}"></td>`).join('')}</tr>`).join('')}</table></div>
+   <div class="row" style="margin-top:8px"><button class="sm" data-t="ar">+ Row</button><button class="sm" data-t="ac">+ Column</button><button class="sm" data-t="dr">− Row</button><button class="sm" data-t="dc">− Column</button></div></div>
+  <button class="p" id="gen" style="width:100%;padding:14px;font-size:1.05rem">✨ Generate my report</button>`;
+  $('#back').onclick = async () => { await saveNow(true); ED = null; vReports(); };
+  $('#sv').onclick = () => saveNow();
+  if ($('#vr')) $('#vr').onclick = () => { ED.view = 'result'; vEditor(); };
+  $('#gen').onclick = () => generate($('#gen'));
+  $('#pup').onchange = e => { const f = e.target.files[0]; if (!f) return; if (f.size > 200000) return toast('File too large', true); const r = new FileReader(); r.onload = () => { D.procRaw = String(r.result).slice(0, 6000); saveNow(true); vEditor(); toast('Procedure loaded ✓'); }; r.readAsText(f); };
+}
+async function generate(btn) {
+  const D = ED.data;
+  if (!(D.topic || '').trim() || !(D.title || '').trim()) return toast('Enter the Topic and Title first', true);
+  if (!(D.procRaw || '').trim()) return toast('Add your procedure first', true);
+  const old = btn.textContent; btn.disabled = true; btn.textContent = '⏳ Writing your report… this can take up to a minute';
+  try {
+    const r = await api('/generate', 'POST', { subjectId: ED.subjectId, input: { topic: D.topic, title: D.title, task: D.task, expname: D.expname, reagents: D.reagents, apparatus: D.apparatus, procedure: D.procRaw, table: D.table } });
+    D.objectives = r.objectives; D.intro = r.introduction; D.steps = r.steps; D.discussion = r.discussion; D.conclusion = r.conclusion; D.calc = r.calculations; D.refs = r.references.join('\n'); D.gen = true;
+    if (!D.dtopic) D.dtopic = D.topic; if (!D.dtitle) D.dtitle = D.title;
+    ED.note = r.note; ED.view = 'result'; ED.edit = false; await saveNow(true); vEditor(); scrollTo(0, 0);
+  } catch (e) { toast(e.message, true); if (e.status === 402) ACCESS = false; btn.disabled = false; btn.textContent = old; }
+}
+
+// ----- step 2: the finished report -----
+function vResult() {
+  const D = ED.data; DOING = 'Viewing generated ' + ED.subjectName + ' report';
+  const ta = (k, l, v) => `<div class="card"><h2>${l}</h2><textarea data-k="${k}" style="min-height:120px">${esc(v || '')}</textarea></div>`;
+  $('#view').innerHTML = `
+  <div class="row"><button id="lst">📁 My reports</button><button id="back">← Edit my inputs</button><button id="rg">🔄 Regenerate</button><button id="ed" class="${ED.edit ? 'on' : ''}">✏️ ${ED.edit ? 'Done editing' : 'Edit text'}</button><span style="flex:1"></span><button id="sv">💾 Save</button><button class="p" id="pv">🖨 Print / Save as PDF</button></div>
+  <div id="sst" class="mute" style="font-size:.85rem;margin-bottom:8px">Saved in your storage</div>
+  ${ED.note ? `<div class="tip">${esc(ED.note)}</div>` : ''}
+  ${ED.edit ? `<div class="card"><h2>Objectives</h2>${[0, 1, 2, 3, 4, 5].map(i => `<div class="row"><b>${i + 1}.</b><input data-o="${i}" value="${esc(D.objectives[i] || '')}"></div>`).join('')}</div>
+   ${ta('intro', 'Introduction', D.intro)}
+   <div class="card"><h2>Procedure (one step per line)</h2><textarea data-steps="1" style="min-height:160px">${esc(D.steps.join('\n'))}</textarea></div>
+   ${ta('discussion', 'Discussion', D.discussion)}${ta('conclusion', 'Conclusions', D.conclusion)}${ta('calc', 'Calculations', D.calc)}${ta('refs', 'References (one per line)', D.refs)}`
+   : `<p class="mute" style="font-size:.85rem">Please check the calculations and references before submitting.</p>${preview()}`}`;
+  $('#lst').onclick = async () => { await saveNow(true); ED = null; vReports(); };
+  $('#back').onclick = () => { ED.view = 'input'; vEditor(); };
+  $('#rg').onclick = wrap(async () => { if (confirm('Write the report again? Your edits to the generated text will be replaced.')) await generate($('#rg')); });
+  $('#ed').onclick = () => { ED.edit = !ED.edit; vEditor(); };
+  $('#sv').onclick = () => saveNow();
+  $('#pv').onclick = () => { $('#printArea').innerHTML = preview(); window.print(); };
+}
+document.addEventListener('input', e => {
+  if (!ED) return; const d = e.target.dataset, D = ED.data;
+  if (e.target.id === 'rt') ED.title = e.target.value;
+  else if (d.steps) D.steps = e.target.value.split('\n').map(x => x.trim()).filter(Boolean);
+  else if (d.k !== undefined) D[d.k] = e.target.value;
+  else if (d.o !== undefined) D.objectives[+d.o] = e.target.value;
+  else if (d.l) D[d.l][+d.i] = e.target.value;
+  else if (d.th !== undefined) D.table.h[+d.th] = e.target.value;
+  else if (d.td) { const [a, b] = d.td.split('-'); D.table.r[+a][+b] = e.target.value; } else return;
+  const s = $('#sst'); if (s) s.textContent = 'Unsaved changes…'; clearTimeout(saveT); saveT = setTimeout(() => saveNow(true), 4000);
+});
+document.addEventListener('click', e => {
+  if (!ED || ED.view !== 'input') return; const d = e.target.dataset, D = ED.data, t = D.table, n = t.h.length;
+  if (d.add) D[d.add].push('');
+  else if (d.del) { const [k, i] = d.del.split('-'); if (D[k].length > 1) D[k].splice(+i, 1); else D[k][0] = ''; }
+  else if (d.t) { if (d.t === 'ar') t.r.push(Array(n).fill('')); if (d.t === 'ac') { t.h.push('Column ' + (n + 1)); t.r.forEach(r => r.push('')); } if (d.t === 'dr' && t.r.length > 1) t.r.pop(); if (d.t === 'dc' && n > 1) { t.h.pop(); t.r.forEach(r => r.pop()); } }
+  else return;
+  const y = scrollY; vEditor(); scrollTo(0, y);
+});
+async function saveNow(quiet) {
+  clearTimeout(saveT); const R = ED; if (!R) return;
+  try { const r = await api('/reports', 'POST', { id: R.id, subjectId: R.subjectId, title: R.title || R.data.title || R.data.expname, data: R.data }); R.id = r.id; const s = $('#sst'); if (s) s.textContent = 'Saved ✓ ' + new Date(r.updated).toLocaleTimeString(); if (!quiet) toast('Saved to your storage ✓'); }
+  catch (e) { toast(e.message, true); if (e.status === 402) { ACCESS = false; } }
+}
+const ph = (v, p) => v && v.trim() ? esc(v) : `<span class="ph">${p}</span>`;
+function preview() {
+  const D = ED.data, t = D.table, n = Math.max(D.reagents.length, D.apparatus.length);
+  let rows = ''; for (let i = 0; i < n; i++) if ((D.reagents[i] || '').trim() || (D.apparatus[i] || '').trim()) rows += `<tr><td>${esc(D.reagents[i] || '')}</td><td>${esc(D.apparatus[i] || '')}</td></tr>`;
+  const sec = (k, h) => `<h3>${h}</h3><p>${ph(D[k], 'Not written yet')}</p>`, ob = (D.objectives || []).filter(x => x && x.trim()), st = D.steps || [], rf = (D.refs || '').split('\n').filter(x => x.trim());
+  return `<div class="page cover"><h1>${ph(D.institution, 'Institution')}</h1>${FIELDS.slice(1).map(f => `<div class="l"><b>${f[1]}:</b><span>${ph(D[f[0]], '—')}</span></div>`).join('')}</div>
+  <div class="page"><h3>Objectives</h3>${ob.length ? `<ol>${ob.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : '<p class="ph">—</p>'}${sec('intro', '3. Introduction')}
+  <h3>4. Reagents and apparatus</h3><table><tr><th>Reagents</th><th>Apparatus</th></tr>${rows}</table></div>
+  <div class="page"><h3>5. Procedure</h3>${st.length ? `<ol>${st.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : '<p class="ph">—</p>'}<h3>6. Data sheet</h3><p>${DSHEET.map(f => `<b>${f[1]}:</b> ${esc(D[f[0]]) || '—'}`).join('<br>')}</p>
+  <table><tr>${t.h.map(h => `<th>${esc(h)}</th>`).join('')}</tr>${t.r.map(r => `<tr>${r.map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</table></div>
+  <div class="page">${sec('discussion', '7. Discussion')}${sec('conclusion', '8. Conclusions')}${sec('calc', '9. Calculations')}<h3>10. References</h3>${rf.length ? `<ol>${rf.map(x => `<li>${esc(x)}</li>`).join('')}</ol>` : '<p class="ph">—</p>'}</div>`;
+}
+
+// ---------- activity ----------
+async function vActs() {
+  const a = await api('/activities');
+  $('#view').innerHTML = `<div class="card"><h2>Your activity</h2>${a.length ? `<div class="scroll"><table><tr><th>When</th><th>What</th></tr>${a.map(x => `<tr><td>${when(x.t)}</td><td>${esc(x.detail)}</td></tr>`).join('')}</table></div>` : '<p class="mute">No activity yet.</p>'}</div>`;
+}
+
+// ---------- profile ----------
+const toBuf = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+const toB64 = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+async function createPasskey(password) {
+  if (!window.PublicKeyCredential) throw new Error('This browser/device does not support fingerprint passkeys');
+  const o = await api('/webauthn/register/options', 'POST', { password }); o.challenge = toBuf(o.challenge); o.user.id = toBuf(o.user.id); (o.excludeCredentials || []).forEach(c => c.id = toBuf(c.id));
+  const c = await navigator.credentials.create({ publicKey: o });
+  return api('/webauthn/register/verify', 'POST', { clientDataJSON: toB64(c.response.clientDataJSON), attestationObject: toB64(c.response.attestationObject) });
+}
+async function fingerprintToken() {
+  const o = await api('/webauthn/auth/options', 'POST', {}); o.challenge = toBuf(o.challenge); o.allowCredentials.forEach(c => c.id = toBuf(c.id));
+  const a = await navigator.credentials.get({ publicKey: o });
+  return (await api('/webauthn/auth/verify', 'POST', { id: a.id, clientDataJSON: toB64(a.response.clientDataJSON), authenticatorData: toB64(a.response.authenticatorData), signature: toB64(a.response.signature) })).token;
+}
+function vProfile() {
+  $('#view').innerHTML = `
+  <div class="card"><h2>Profile photo</h2><div class="row">${ME.photo ? `<img class="avatar" style="width:72px;height:72px" src="${esc(ME.photo)}">` : `<span class="avatar" style="width:72px;height:72px;font-size:1.6rem">${esc(ME.name.slice(0, 1))}</span>`}
+   <input type="file" id="pf" accept="image/*" style="max-width:260px">${ME.photo ? '<button class="sm d" id="pr">Remove</button>' : ''}</div></div>
+  <div class="card"><h2>Account</h2><p>📞 ${esc(ME.phone)} · 📧 ${esc(ME.email)}</p>
+   <h3>Fingerprint / passkey ${ME.passkeys ? '<span class="pill on">set up (' + ME.passkeys + ')</span>' : '<span class="pill off">not set up</span>'}</h3>
+   <p class="mute" style="font-size:.88rem">Required to change your email or password. Uses your phone’s fingerprint, face or screen lock.</p>
+   <div class="row"><input id="pkpw" type="password" placeholder="Confirm your current password" style="max-width:260px"><button id="pkb">${ME.passkeys ? 'Add another passkey' : 'Set up fingerprint'}</button></div>
+   <h3>Change email or password</h3><div class="grid"><div><label>New email (optional)</label><input id="ne" type="email"></div><div><label>New password (optional)</label><input id="np" type="password"></div></div>
+   <p><button class="p" id="cb">🔐 Approve with fingerprint &amp; save</button></p></div>
+  <div class="card"><h2 class="bad">Delete account</h2><p class="mute">Removes your account, subscriptions and all saved reports permanently.</p>
+   <div class="row"><input id="dpw" type="password" placeholder="Your password" style="max-width:260px"><button class="d" id="db">Delete my account</button></div></div>`;
+  $('#pf').onchange = wrap(async e => {
+    const f = e.target.files[0]; if (!f) return; const img = new Image(); img.src = URL.createObjectURL(f); await img.decode();
+    const c = document.createElement('canvas'), s = Math.min(1, 256 / Math.max(img.width, img.height)); c.width = img.width * s; c.height = img.height * s;
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    ME.photo = (await api('/profile/photo', 'PUT', { photo: c.toDataURL('image/jpeg', .8) })).photo; head(); vProfile(); toast('Photo updated ✓');
+  });
+  if ($('#pr')) $('#pr').onclick = wrap(async () => { await api('/profile/photo', 'PUT', { photo: '' }); ME.photo = ''; head(); vProfile(); });
+  $('#pkb').onclick = wrap(async () => { const r = await createPasskey($('#pkpw').value); ME.passkeys = r.passkeys; toast('Fingerprint set up ✓'); vProfile(); });
+  $('#cb').onclick = wrap(async () => {
+    const email = $('#ne').value.trim(), password = $('#np').value; if (!email && !password) return toast('Enter a new email or password', true);
+    if (!ME.passkeys) return toast('Set up your fingerprint first (above)', true);
+    const token = await fingerprintToken(); const r = await api('/account/change', 'POST', { token, email, password }); ME = r.user; toast('Saved – approved with fingerprint ✓'); vProfile();
+  });
+  $('#db').onclick = wrap(async () => { if (!confirm('Delete your account and ALL your work forever?')) return; await api('/account/delete', 'POST', { password: $('#dpw').value }); location.reload(); });
+}
+boot();
+</script></body></html>
